@@ -303,6 +303,30 @@
     padding:12px 14px; background:var(--paper-dim); border-radius:10px;
     border-left:3px solid var(--gold);
   }
+
+  .assumptions-card{
+    margin-top:22px;
+    border:1px solid var(--line); border-radius:var(--radius);
+    background:var(--white); padding:20px 22px 6px;
+  }
+  .assumptions-title{
+    font-family:'IBM Plex Mono', monospace; font-size:11px; text-transform:uppercase;
+    letter-spacing:0.06em; color:var(--ink-soft); margin-bottom:14px;
+  }
+  .assumptions-table{ width:100%; border-collapse:collapse; margin-bottom:14px; }
+  .assumptions-table th{
+    text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:0.04em;
+    color:var(--ink-soft); font-weight:600; padding:8px 10px; border-bottom:1px solid var(--line);
+  }
+  .assumptions-table td{
+    font-size:13px; padding:11px 10px; border-bottom:1px solid var(--paper-dim);
+    vertical-align:top; color:var(--ink);
+  }
+  .assumptions-table tr:last-child td{ border-bottom:none; }
+  .assumptions-table td:first-child{ font-weight:600; white-space:nowrap; }
+  @media (max-width:700px){
+    .assumptions-table{ display:block; overflow-x:auto; }
+  }
 </style>
 </head>
 <body>
@@ -428,6 +452,19 @@
       <div class="log-empty">Press "Play the day" to watch the Brain make its calls.</div>
     </div>
     <div class="note" id="contextNote">Independent house, Bangalore · rooftop solar + inverter backup · Time-of-Day tariff applied.</div>
+
+    <div class="assumptions-card" id="assumptionsCard">
+      <div class="assumptions-title">What's real vs. what's assumed here</div>
+      <table class="assumptions-table">
+        <thead><tr><th>Input</th><th>In this prototype</th><th>What Round-2-proper would need</th></tr></thead>
+        <tbody>
+          <tr><td>Time-of-Day tariff shape</td><td>Modelled on published ToD structures (cheap solar window, costly evening peak)</td><td>Actual DISCOM tariff order for the target city</td></tr>
+          <tr><td>Solar generation curve</td><td>Standard bell-shaped daylight profile</td><td>Real irradiance data for the install location</td></tr>
+          <tr><td>Appliance load (kWh) &amp; duration</td><td>Illustrative, sized to be directionally realistic</td><td>Metered data from real households or manufacturer spec sheets</td></tr>
+          <tr><td>Scheduling logic</td><td>Live-computed: cheapest window/hours by effective price, right here in this page</td><td>Same logic, extended with weather forecast, occupancy sensing, and comfort constraints</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </section>
 
@@ -466,16 +503,21 @@ const SOLAR = [
   0,0
 ];
 
+// Each appliance now declares only: kwh/hr, how many hours it needs to run (duration),
+// whether those hours must be one unbroken block (contiguous), and its DUMB schedule
+// (fixed habit — this one stays hand-set, because "dumb" means it doesn't optimise).
+// The BRAIN schedule is no longer hand-picked: it is computed live, at render time,
+// by optimiseSchedule() below, reading the same TARIFF/SOLAR arrays a real controller would.
 const PROFILES = {
   independent: {
     label: 'Independent house',
     context: 'Independent house, Bangalore · rooftop solar + inverter backup · Time-of-Day tariff applied.',
     hasSolar: true,
     appliances: {
-      geyser:   { label:'Geyser',        kwh:2.0, dumbHours:[6,7,19,20],           brainHours:[9,10] },
-      washer:   { label:'Washing machine',kwh:1.2, dumbHours:[8,9],                 brainHours:[12,13] },
-      ac:       { label:'AC (bedroom)',   kwh:1.6, dumbHours:[14,15,16,17,18,19,20,21,22], brainHours:[11,12,13,14,20,21,22] },
-      ev:       { label:'EV charging',    kwh:3.0, dumbHours:[19,20,21],           brainHours:[10,11,12] }
+      geyser:   { label:'Geyser',         kwh:2.0, duration:2, contiguous:true,  dumbHours:[6,7,19,20] },
+      washer:   { label:'Washing machine',kwh:1.2, duration:2, contiguous:true,  dumbHours:[8,9] },
+      ac:       { label:'AC (bedroom)',   kwh:1.6, duration:9, contiguous:false, dumbHours:[14,15,16,17,18,19,20,21,22] },
+      ev:       { label:'EV charging',    kwh:3.0, duration:3, contiguous:true,  dumbHours:[19,20,21] }
     }
   },
   flat: {
@@ -483,9 +525,9 @@ const PROFILES = {
     context: 'Society flat, Pune · shared diesel-generator backup, no rooftop solar · Time-of-Day tariff applied.',
     hasSolar: false,
     appliances: {
-      geyser:   { label:'Geyser',        kwh:1.8, dumbHours:[7,8,19,20],           brainHours:[9,10] },
-      washer:   { label:'Washing machine',kwh:1.0, dumbHours:[9,10],                brainHours:[13,14] },
-      ac:       { label:'AC (bedroom)',   kwh:1.4, dumbHours:[15,16,17,18,19,20,21,22], brainHours:[13,14,20,21,22] }
+      geyser:   { label:'Geyser',         kwh:1.8, duration:2, contiguous:true,  dumbHours:[7,8,19,20] },
+      washer:   { label:'Washing machine',kwh:1.0, duration:2, contiguous:true,  dumbHours:[9,10] },
+      ac:       { label:'AC (bedroom)',   kwh:1.4, duration:8, contiguous:false, dumbHours:[15,16,17,18,19,20,21,22] }
     }
   },
   nearcap: {
@@ -493,11 +535,56 @@ const PROFILES = {
     context: 'Near-cap subsidised home, Hyderabad · protecting the free-usage limit · Time-of-Day tariff applied.',
     hasSolar: false,
     appliances: {
-      geyser:   { label:'Geyser',        kwh:1.5, dumbHours:[7,20],                brainHours:[9] },
-      ac:       { label:'AC (bedroom)',   kwh:1.2, dumbHours:[16,17,18,19,20,21],  brainHours:[13,14,21] }
+      geyser:   { label:'Geyser',         kwh:1.5, duration:1, contiguous:true,  dumbHours:[7,20] },
+      ac:       { label:'AC (bedroom)',   kwh:1.2, duration:6, contiguous:false, dumbHours:[16,17,18,19,20,21] }
     }
   }
 };
+
+/* ============================================================
+   LIVE OPTIMISER — this is the Brain's actual decision logic.
+   Given an appliance's duration and the day's real tariff + solar
+   arrays, it picks the cheapest hours available — the same inputs
+   and the same job a real on-device controller would run.
+   Nothing here is pre-picked per profile; it is computed fresh
+   every time TARIFF, SOLAR, or the appliance list changes.
+   ============================================================ */
+function effectivePrice(hour, hasSolar){
+  let price = TARIFF[hour];
+  if(hasSolar){
+    const solarOffset = SOLAR[hour] * 0.85;
+    price = price * (1 - solarOffset) + price*0.15*solarOffset;
+  }
+  return price;
+}
+
+function optimiseSchedule(app, hasSolar){
+  const hours = [...Array(24).keys()];
+  if(app.contiguous){
+    // slide every possible N-hour window, score by average effective price, keep cheapest
+    let best = null, bestScore = Infinity;
+    for(let start=0; start<=24-app.duration; start++){
+      const window = hours.slice(start, start+app.duration);
+      const score = window.reduce((s,h)=>s+effectivePrice(h,hasSolar),0) / app.duration;
+      if(score < bestScore){ bestScore = score; best = window; }
+    }
+    return best;
+  } else {
+    // pick the N cheapest individual hours across the day
+    return [...hours]
+      .sort((a,b)=>effectivePrice(a,hasSolar)-effectivePrice(b,hasSolar))
+      .slice(0, app.duration)
+      .sort((a,b)=>a-b);
+  }
+}
+
+// compute + cache brainHours for every appliance in a profile
+function withBrainSchedule(profile){
+  Object.values(profile.appliances).forEach(app=>{
+    app.brainHours = optimiseSchedule(app, profile.hasSolar);
+  });
+  return profile;
+}
 
 const COLORS = ['#2C6E5B','#3E5468','#E2992F','#BD4433'];
 
@@ -564,21 +651,29 @@ function buildDecisionLog(profileKey){
   const profile = PROFILES[profileKey];
   const entries = [];
   Object.values(profile.appliances).forEach(app=>{
-    app.brainHours.forEach(h=>{
-      const solarStrong = profile.hasSolar && SOLAR[h] > 0.5;
-      const cheap = TARIFF[h] <= 6.2;
+    const dumbAvg = app.dumbHours.reduce((s,h)=>s+effectivePrice(h,profile.hasSolar),0) / app.dumbHours.length;
+    const brainAvg = app.brainHours.reduce((s,h)=>s+effectivePrice(h,profile.hasSolar),0) / app.brainHours.length;
+    const pctCheaper = Math.round((1 - brainAvg/dumbAvg) * 100);
+    // group brainHours into contiguous blocks for cleaner logging
+    const sorted = [...app.brainHours].sort((a,b)=>a-b);
+    let blocks=[], start=sorted[0], prev=sorted[0];
+    for(let i=1;i<sorted.length;i++){
+      if(sorted[i]===prev+1){ prev=sorted[i]; continue; }
+      blocks.push([start,prev]); start=sorted[i]; prev=sorted[i];
+    }
+    blocks.push([start,prev]);
+
+    blocks.forEach(([s,e])=>{
+      const solarStrong = profile.hasSolar && SOLAR[s] > 0.5;
       let reason;
-      if(solarStrong) reason = `solar surplus detected — running on your own panels`;
-      else if(cheap) reason = `off-peak window — cheapest grid hour available`;
-      else reason = `pre-positioning before the evening price spike`;
-      entries.push({ hour:h, text:`${app.label} running — ${reason}` });
+      if(solarStrong) reason = `solar surplus at this hour — self-consuming instead of buying grid power`;
+      else if(TARIFF[s] <= 6.2) reason = `cheapest grid window found — off-peak rate`;
+      else reason = `least-bad hour available for this load today`;
+      const savedNote = pctCheaper > 0 ? ` (${pctCheaper}% cheaper than the fixed-habit hour)` : '';
+      entries.push({ hour:s, text:`${app.label} scheduled ${fmtHour(s)}${e!==s?'–'+fmtHour(e+1):''} — ${reason}${savedNote}` });
     });
   });
-  entries.push({ hour: 20, text: `Empty-room check — bedroom AC verified occupied, left running` });
   entries.push({ hour: 13, text: `Living-room AC found running in an empty room — shut off` });
-  if(profile.hasSolar){
-    entries.push({ hour: 12, text: `Peak solar generation — deferred loads pulled forward to self-consume` });
-  }
   entries.sort((a,b)=>a.hour-b.hour);
   return entries;
 }
@@ -748,6 +843,7 @@ function stopPlay(){
 function render(){
   stopPlay();
   state.minute = 0;
+  withBrainSchedule(PROFILES[state.profile]);
   fullLog = buildDecisionLog(state.profile);
   renderTimeline();
   renderStats();
